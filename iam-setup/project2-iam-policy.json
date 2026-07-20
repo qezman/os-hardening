@@ -50,6 +50,12 @@
         "dynamodb:DeleteItem"
       ],
       "Resource": "arn:aws:dynamodb:us-east-1:560205084952:table/os-hardening-tf-lock"
+    },
+    {
+      "Sid": "ReadPublicAmiParameters",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": "arn:aws:ssm:us-east-1::parameter/aws/service/*"
     }
   ]
 }
