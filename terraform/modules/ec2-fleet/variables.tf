@@ -32,7 +32,7 @@ variable "security_group_id" {
 
 variable "iam_instance_profile_name" {
   description = "IAM instance profile name for compliance report uploads"
-  default     = string
+  type        = string
 }
 
 variable "project_name" {

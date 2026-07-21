@@ -9,6 +9,8 @@ terraform {
   }
 }
 
+# scoped "project2" CLI profile so it never
+# runs against a different AWS identity/acct
 provider "aws" {
   region  = var.aws_region
   profile = "project2"

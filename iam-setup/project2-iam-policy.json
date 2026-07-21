@@ -11,7 +11,10 @@
         "iam:TagRole",
         "iam:PutRolePolicy",
         "iam:GetRolePolicy",
-        "iam:DeleteRolePolicy"
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole"
       ],
       "Resource": "arn:aws:iam::560205084952:role/project2-*"
     },

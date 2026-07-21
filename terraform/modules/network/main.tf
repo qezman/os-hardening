@@ -1,3 +1,4 @@
+# VPC - DNS support/hostnames enabled
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -9,10 +10,14 @@ resource "aws_vpc" "main" {
   }
 }
 
+# Public subnet
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_cidr
   availability_zone       = var.availability_zone
+
+  # map_public_ip_on_launch gives
+  # instances a public IP, without it they'd be private-only
   map_public_ip_on_launch = true
 
   tags = {
@@ -21,6 +26,7 @@ resource "aws_subnet" "public" {
   }
 }
 
+# Internet gateway - the "door" to the internet
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
@@ -30,6 +36,7 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
+# Route table sending all outbound traffic (0.0.0.0/0) through the igw
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -44,6 +51,7 @@ resource "aws_route_table" "public" {
   }
 }
 
+# without this the subnet would silently fall back to the VPC's default
 resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public.id
   route_table_id = aws_route_table.public.id
