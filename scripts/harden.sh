@@ -41,4 +41,32 @@ harden_ssh() {
   echo "--- SSH hardening complete ---"
 }
 
+
+harden_ssh_port() {
+  echo "--- Adding hardened SSH port (2222) alongside port 22 ---"
+
+  # Ensure Port 22 is explicit
+  if grep -q "^Port 22$" "$SSHD_CONFIG"; then
+    echo "Port 22 already explicit - skipping."
+  else
+    echo "Port 22" | sudo tee -a "$SSHD_CONFIG" > /dev/null
+    echo "Added explicit 'Port 22'."
+  fi
+
+  # Add Port 2222 alongside it - Verify 2222
+  # works before cutting off the fallback port in a later, separate step.
+  if grep -q "^Port 2222$" "$SSHD_CONFIG"; then
+    echo "Port 2222 already configured - skipping."
+  else
+    echo "Port 2222" | sudo tee -a "$SSHD_CONFIG" > /dev/null
+    echo "Added 'Port 2222'."
+  fi
+
+  echo "Restarting sshd..."
+  sudo systemctl restart sshd
+
+  echo "--- Hardened port added. Verify port 2222 works BEFORE removing port 22. ---"
+}
+
 harden_ssh
+harden_ssh_port
