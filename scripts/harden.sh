@@ -84,7 +84,32 @@ remove_legacy_ssh_port() {
   echo "--- Port 22 removed. SSH now available on 2222 only. ---"
 }
 
+harden_firewall() {
+  echo "--- Configuring firewall (UFW) ---"
+
+  if ! command -v ufw &> /dev/null; then
+    echo "UFW not found, installing..."
+    sudo apt-get update -qq
+    sudo apt-get install -y ufw
+  fi
+
+  # Default deny all inbound, allow all outbound.
+  sudo ufw default deny incoming
+  sudo ufw default allow outgoing
+
+  # Only allow the hardened SSH port - port 22 is already closed at
+  # the sshd level and the sg
+  sudo ufw allow 2222/tcp
+
+  # --force skips the interactive "are you sure" prompt, since this
+  # script needs to run non-interactively.
+  sudo ufw --force enable
+
+  echo "--- Firewall configured. Status: ---"
+  sudo ufw status verbose
+}
+
 harden_ssh
 harden_ssh_port
 # remove_legacy_ssh_port # run manually only after verifying port 2222 access
-
+harden_firewall
