@@ -4,13 +4,13 @@ resource "aws_security_group" "ssh_access" {
   vpc_id      = var.vpc_id
 
 # Pre-hardening SSH port - open only to my IP
-  ingress {
-    description = "SSH - default port - pre-hardening"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.trusted_ip_cidr]
-  }
+  # ingress {
+  #   description = "SSH - default port - pre-hardening"
+  #   from_port   = 22
+  #   to_port     = 22
+  #   protocol    = "tcp"
+  #   cidr_blocks = [var.trusted_ip_cidr]
+  # }
 
   # Post-hardening SSH port - kept open to prevent lockout lockout.
   ingress {
