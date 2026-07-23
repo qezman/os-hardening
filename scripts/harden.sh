@@ -140,10 +140,48 @@ harden_firewall() {
       echo "--- Firewall configured. Status: ---"
       sudo firewall-cmd --list-all
     fi
-      
+}
+
+harden_patching() {
+  echo "--- Configuring automatic security patching ---"
+
+  if [ "$DISTRO" == "ubuntu" ]; then
+    echo "Using unattended-upgrades (Ubuntu)"
+
+    if ! dpkg -l | grep -q unattended-upgrades; then
+      echo "unattended-upgrades not found, installing..."
+      sudo apt-get update -qq
+      sudo apt-get install -y unattended-upgrades
+    fi
+
+    # Enable the systemd timer that actually triggers daily checks.
+    sudo systemctl enable --now unattended-upgrades
+
+    echo "--- Patching configured. Status: ---"
+    sudo systemctl status unattended-upgrades --no-pager
+
+  elif [ "$DISTRO" == "amazon-linux" ]; then
+    echo "Using dnf-automatic (Amazon Linux)"
+
+    if ! rpm -q dnf-automatic &> /dev/null; then
+      echo "dnf-automatic not found, installing..."
+      sudo dnf install -y dnf-automatic
+    fi
+
+    # dnf-automatic ships with a config file controlling whether it
+    # actually applies updates or just reports them - default is
+    # apply_updates = no, we need to flip it to yes
+    sudo sed -i 's/^apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
+
+    sudo systemctl enable --now dnf-automatic.timer
+
+    echo "--- Patching configured. Status: ---"
+    sudo systemctl status dnf-automatic.timer --no-pager
+  fi
 }
 
 harden_ssh
 harden_ssh_port
 # remove_legacy_ssh_port # run manually only after verifying port 2222 access
 harden_firewall
+harden_patching
