@@ -71,7 +71,7 @@ harden_ssh_port() {
 remove_legacy_ssh_port() {
   echo "--- Removing legacy port 22 (2222 already verified working) ---"
 
-  if grep -q "^Port 22$" "$SSHD_CONFIG"; then
+  if sudo grep -q "^Port 22$" "$SSHD_CONFIG"; then
     sudo sed -i '/^Port 22$/d' "$SSHD_CONFIG"
     echo "Removed 'Port 22' from sshd_config."
   else
