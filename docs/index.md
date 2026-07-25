@@ -1,24 +1,39 @@
-# Technical Walkthrough - Automated OS Hardening & Security Audit
+---
 
-This document is the full build log: what was provisioned, how each hardening step works, what broke along the way, and why specific design decisions were made. Screenshots referenced below should be placed in `docs/assets/` using the filenames suggested.
+## layout: default
+title: Automated OS Hardening & Security Audit
+description: Terraform-provisioned EC2 hardening across Ubuntu and Amazon Linux, with compliance reporting to S3.
+
+# Automated OS Hardening & Security Audit
+
+Terraform provisions a five-instance EC2 fleet, then a cross-distro Bash toolchain hardens SSH, host firewalls, patching, and compliance reporting. The result is an end-to-end security automation project with least-privilege IAM, remote Terraform state, and Markdown audit reports uploaded to S3.
+
+[View the repository](https://github.com/qezman/os-hardening) · [Read the README](https://github.com/qezman/os-hardening/blob/main/README.md)
+
+Architecture Diagram
+
+## What This Project Demonstrates
+
+- Modular Terraform for VPC, security group, EC2 fleet, and compliance bucket resources
+- Remote state in S3 with DynamoDB locking
+- Least-privilege IAM for the automation user and EC2 instance profile
+- Idempotent hardening for Ubuntu 22.04 and Amazon Linux 2023
+- SSH migration from port 22 to a hardened port with a verified two-stage rollout
+- Host firewall enforcement with UFW and firewalld
+- Automated security patching with unattended-upgrades and dnf-automatic
+- Per-host compliance reports generated in Markdown and uploaded to S3
 
 ## 1. Architecture
 
-```
-![Architecture Diagram](./architecture.png)
-```
+A single VPC and public subnet host the fleet: three Ubuntu 22.04 instances and two Amazon Linux 2023 instances. Inbound SSH is restricted to one trusted IP and one hardened port, enforced independently at the AWS security group, host firewall, and SSH daemon layers.
 
-A single VPC and public subnet host a 5-instance fleet (3 Ubuntu 22.04, 2 Amazon Linux 2023). Inbound access is restricted to one trusted IP on a single hardened SSH port, enforced independently at three layers: the AWS security group, each instance's host firewall, and the SSH daemon's own port binding. Instances authenticate to S3 via an IAM instance profile - no static AWS credentials exist anywhere in the codebase or on any host.
+Instances authenticate to S3 through an IAM instance profile, so no static AWS credentials are stored in the codebase or on the hosts.
 
-Elastic IPs are attached to each instance so its address survives a stop/start cycle, avoiding the churn of AWS's default ephemeral public IPs.
+## 2. Infrastructure Provisioning
 
-## 2. Infrastructure provisioning
+Terraform is organized into four modules: `network`, `security-group`, `compliance-bucket`, and `ec2-fleet`. The root module wires them together while state is stored remotely in a versioned S3 bucket with DynamoDB locking.
 
-Terraform is organized into four modules - `network`, `security-group`, `compliance-bucket`, `ec2-fleet` - wired together in a thin root `main.tf`. State is remote (S3, versioned) with DynamoDB-based locking to prevent concurrent-apply corruption.
-
-Terraform plan output
-
-The fleet is defined once, as a typed map, and created via `for_each` rather than five hardcoded resource blocks:
+The fleet is defined once as a typed map and created with `for_each`, so each instance has a stable identity:
 
 ```hcl
 resource "aws_instance" "fleet" {
@@ -28,93 +43,85 @@ resource "aws_instance" "fleet" {
 }
 ```
 
-Using `for_each` (keyed by name) instead of `count` (indexed by position) matters operationally: removing one entry from the map destroys exactly that instance, rather than shifting every subsequent index and forcing unrelated instances to be recreated.
+Using `for_each` keyed by instance name avoids the churn that can happen with `count`, where removing one item shifts later indexes and can recreate unrelated instances.
 
-`[02-instance-list](./assets/02-instance-list.png)`
-`[02-instance-list-cli](./assets/02-instance-list-cli.png)`
+EC2 instance list in AWS consoleEC2 instance list from CLI
 
-## 3. IAM design
+## 3. IAM Design
 
-The automation user (`project2-automation`) runs under a hand-scoped policy, not `AdministratorAccess` - every permission was added only when a real `AccessDenied` error demanded it, then scoped as tightly as the error allowed. The full policy lives in `[iam-setup/project2-iam-policy.json](../iam-setup/project2-iam-policy.json)`.
+The automation user, `project2-automation`, runs under a scoped policy rather than `AdministratorAccess`. Permissions were added only when a real `AccessDenied` error required them, then tightened to the narrowest useful resource scope.
 
-Notable design points:
+Key points:
 
-- All IAM resource management is scoped to `project2-*` named resources only - this automation user cannot touch any other role, policy, or instance profile in the account.
-- `iam:PassRole` carries an explicit `iam:PassedToService: ec2.amazonaws.com` condition, so the scoped roles can only be handed to EC2, not to any other AWS service.
-- The EC2 instance role itself is even narrower: `s3:PutObject`, scoped to a single bucket's object path - nothing else.
+- IAM resource management is scoped to `project2-*` resources.
+- `iam:PassRole` is limited to `ec2.amazonaws.com`.
+- The EC2 role can only write compliance objects to the project S3 bucket.
+- The policy is documented in [iam-setup/project2-iam-policy.json](../iam-setup/project2-iam-policy.json).
 
-This iterative approach surfaced a real, recurring AWS provider behavior worth documenting: the `aws_iam_role` resource performs read-checks (`ListRolePolicies`, `ListAttachedRolePolicies`, `ListInstanceProfilesForRole`) on both create and destroy to detect drift, meaning a role-management policy needs list permissions even if the automation never intends to list anything itself. In a team environment, this policy would instead be derived from CloudTrail activity in a sandbox account rather than discovered live against real infrastructure.
+This exposed a practical AWS provider detail: `aws_iam_role` performs read checks such as `ListRolePolicies`, `ListAttachedRolePolicies`, and `ListInstanceProfilesForRole` during create and destroy operations, so a role-management policy needs those list permissions even when the automation does not directly list roles for its own workflow.
 
-## 4. SSH hardening
+## 4. SSH Hardening
 
-`scripts/harden.sh` runs the same logical sequence on every instance, branching only where the underlying OS tooling differs.
+`scripts/harden.sh` runs the same logical workflow on every instance, branching only where Ubuntu and Amazon Linux use different system tools.
 
-### Root login and password authentication
+Root SSH login and password authentication are disabled through idempotent check-then-modify logic against `sshd_config`. Existing directives are corrected in place, and missing directives are appended only once.
 
-Disabled via idempotent check-then-modify logic against `sshd_config` - each setting is corrected in place if present, appended only if absent, so re-running the script never produces duplicate directives.
+### Two-Stage Port Migration
 
-### Port migration - two-stage, verified
+Moving SSH away from port 22 is the riskiest step, so the script does it in two stages:
 
-The riskiest step in the whole script: moving SSH off port 22. Rather than switching directly (which risks total lockout if anything is misconfigured), the migration happens in two deliberate stages:
+1. `harden_ssh_port` adds port `2222` while keeping port `22` active.
+2. After a fresh connection succeeds on `2222`, `remove_legacy_ssh_port` removes port `22`.
 
-1. `harden_ssh_port` adds port 2222 **alongside** port 22 - both active simultaneously.
-2. Only after a human manually confirms a fresh connection succeeds on 2222 is `remove_legacy_ssh_port` called - a separate function, never auto-invoked - to remove port 22.
+Ubuntu hardening script runUbuntu hardening verificationUbuntu port 22 removal
 
-`[03-ubuntu-harden-run](./assets/03-ubuntu-harden-run.png)`
-`[03a-ubuntu-harden-run](./assets/03a-ubuntu-harden-run.png)`
-`[05-ubuntu-remove-port](./assets/05-ubuntu-remove-port)`
+The same sequence works on Amazon Linux through the firewalld branch:
 
+Amazon Linux hardening script runAmazon Linux SSH verification on port 2222Amazon Linux port 22 removal
 
-The same sequence on Amazon Linux, using the firewalld branch:
+## 5. Host Firewall
 
-`[06-linux-harden-run](./assets/06-linux-harden-run.png)`
-`[07-amzn-2222-verify](./assets/07-amzn-2222-verify)`
-`[08-amzn-remove-port22](./assets/08-amzn-remove-port22.png)`
-
-## 5. Host firewall - cross-distro
-
-`harden_firewall` branches on distro, using each OS's native tool rather than forcing one tool onto both:
+`harden_firewall` uses each distribution's native firewall tool.
 
 
-|                | Ubuntu                            | Amazon Linux                    |
-| -------------- | --------------------------------- | ------------------------------- |
-| Tool           | UFW                               | firewalld                       |
-| Install check  | `command -v ufw`                  | `command -v firewall-cmd`       |
-| Default policy | `deny incoming`, `allow outgoing` | `public` zone                   |
-| Allowed port   | `2222/tcp`                        | `2222/tcp` (explicit port rule) |
+| Area           | Ubuntu                            | Amazon Linux              |
+| -------------- | --------------------------------- | ------------------------- |
+| Tool           | UFW                               | firewalld                 |
+| Install check  | `command -v ufw`                  | `command -v firewall-cmd` |
+| Default policy | `deny incoming`, `allow outgoing` | `public` zone             |
+| Allowed port   | `2222/tcp`                        | `2222/tcp`                |
 
 
-One Amazon-Linux-specific detail caught during testing: firewalld's `public` zone ships with a default `ssh` **service** rule (port 22) independent of any port rules added manually - `firewall-cmd --permanent --remove-service=ssh` was required to fully close port 22 at this layer, since removing it wasn't otherwise implied by adding the 2222 port rule.
+One Amazon Linux detail matters: firewalld's `public` zone includes a default `ssh` service rule for port 22. The script removes that service rule with `firewall-cmd --permanent --remove-service=ssh` so port 22 is actually closed at the host layer.
 
-## 6. Automatic security patching
+## 6. Automatic Security Patching
 
-- **Ubuntu**: `unattended-upgrades` ships pre-installed and pre-configured on the official AMI; the script verifies and (re-)enables it rather than assuming a fresh install is needed.
-- **Amazon Linux**: `dnf-automatic` requires installation. Its default configuration only *checks* for updates without applying them (`apply_updates = no`) - a real, easy-to-miss default that the script explicitly flips to `yes`.
+- Ubuntu: `unattended-upgrades` is verified and enabled.
+- Amazon Linux: `dnf-automatic` is installed and configured with `apply_updates = yes`.
 
 
 
-## 7. Compliance reporting
+## 7. Compliance Reporting
 
-`scripts/generate_report.sh` is a read-only checker, separate from `harden.sh` by design - it verifies current state rather than changing anything, and can be re-run independently (e.g. on a schedule) to catch drift.
+`scripts/generate_report.sh` is read-only by design. It verifies system state independently from `harden.sh`, then writes a Markdown report and uploads it to S3.
 
-Each check mirrors a specific hardening action and re-verifies it directly against live system state, rather than trusting that the hardening script's own prior output was accurate:
+Each check maps back to a specific hardening control:
 
 ```bash
 check_ssh_port() {
   if sudo grep -q "^Port 2222$" /etc/ssh/sshd_config && ! sudo grep -q "^Port 22$" /etc/ssh/sshd_config; then
     add_check_result "SSH migrated to hardened port 2222 only" "PASS"
   ...
+}
 ```
 
-This check caught a real gap during testing: two instances had `harden.sh` run on them but never received the manual `remove_legacy_ssh_port` follow-up, leaving port 22 still bound in `sshd_config` alongside 2222. The report flagged it as a FAIL, prompting the fix - a concrete example of the reporting layer doing its job independently of the hardening layer.
+During testing, this caught two instances where `harden.sh` had run but `remove_legacy_ssh_port` had not, leaving port 22 bound alongside port 2222. The report flagged the drift and prompted the follow-up fix.
 
-`[09-report-run](./assets/09-report-run.png)`
-`[11-report-content](./assets/11-report-content.png)`
+Compliance report generationCompliance report content
 
+## 8. Elastic IPs
 
-## 8. Design decision: Elastic IPs
-
-Instances without an Elastic IP receive a new public IP on every stop/start cycle, which made iterative testing painful - trusted-IP security group rules and locally-cached IPs both went stale on every restart. Elastic IPs were added per-instance, keyed to the same `for_each` map as the instances themselves, so each EIP's lifecycle stays bound to its instance:
+Instances without Elastic IPs receive a new public IP after stop/start, which makes iterative testing painful. The project assigns one Elastic IP per instance, keyed to the same `for_each` map as the EC2 resources:
 
 ```hcl
 resource "aws_eip" "fleet" {
@@ -124,11 +131,11 @@ resource "aws_eip" "fleet" {
 }
 ```
 
-Verified directly: an instance was stopped and restarted, and its public IP was confirmed identical before and after.
+This keeps each instance's public IP stable through stop/start cycles.
 
-## 9. Known limitations
+## 9. Known Limitations
 
-- SSH access is gated by a manually maintained trusted-IP allowlist (`terraform.tfvars`). In production this would be replaced by AWS Systems Manager Session Manager, removing the need for any open inbound SSH port at all.
-- Elastic IPs solve stop/start churn but are still released on a full `terraform destroy` - they do not survive a complete infrastructure teardown and rebuild.
-- The trusted-IP DynamoDB/S3 backend bootstrap (state bucket, lock table, IAM user) is necessarily created outside Terraform, since Terraform cannot provision the backend it depends on - a standard, unavoidable chicken-and-egg exception, not an oversight.
+- SSH access is gated by a manually maintained trusted-IP allowlist in `terraform.tfvars`. In production, AWS Systems Manager Session Manager would remove the need for inbound SSH.
+- Elastic IPs survive stop/start, but not a full `terraform destroy`.
+- The Terraform backend bootstrap resources are created outside Terraform because Terraform cannot provision the backend it depends on.
 

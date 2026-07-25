@@ -1,0 +1,10 @@
+theme: jekyll-theme-cayman
+title: Automated OS Hardening & Security Audit
+description: Terraform-provisioned EC2 hardening across Ubuntu and Amazon Linux, with compliance reporting to S3.
+url: https://qezman.github.io
+baseurl: /os-hardening
+repository: qezman/os-hardening
+markdown: kramdown
+
+github:
+  is_project_page: true
