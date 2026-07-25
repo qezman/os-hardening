@@ -32,3 +32,4 @@ module "ec2_fleet" {
   security_group_id         = module.security_group.security_group_id
   iam_instance_profile_name = module.compliance_bucket.aws_iam_instance_profile_name
 }
+

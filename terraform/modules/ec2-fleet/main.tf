@@ -16,6 +16,19 @@ resource "aws_instance" "fleet" {
   }
 }
 
+resource "aws_eip" "fleet" {
+  for_each = var.instances
+
+  instance = aws_instance.fleet[each.key].id
+  domain = "vpc"
+
+
+  tags = {
+    Name    = "${var.project_name}-${each.key}-eip"
+    Project = var.project_name
+  }
+}
+
 # Registers the public half with AWS so it's injected at instance boot.
 resource "aws_key_pair" "fleet_key" {
   key_name   = "${var.project_name}-key"

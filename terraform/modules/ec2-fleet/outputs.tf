@@ -4,8 +4,8 @@ output "instance_ids" {
 }
 
 output "instance_public_ips" {
-  description = "Map of instance names to their public IPs"
-  value       = { for k, v in aws_instance.fleet : k => v.public_ip }
+  description = "Map of instance names to their fixed public IPs"
+  value       = { for k, v in aws_eip.fleet : k => v.public_ip }
 }
 
 output "private_key_path" {
