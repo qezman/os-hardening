@@ -66,6 +66,10 @@ source harden.sh && remove_legacy_ssh_port
 
 Once every instance is confirmed reachable only on the hardened port, remove the temporary port-22 rule from the security group.
 
+## Documentation
+
+View full documention https://qezman.github.io/os-hardening/
+
 ## Design notes
 
 - **Least-privilege IAM throughout** - the automation user's own policy is scoped to `project2-*` named resources only; the EC2 instance role can only `PutObject` to its one bucket.
