@@ -10,7 +10,7 @@ resource "aws_instance" "fleet" {
   iam_instance_profile   = var.iam_instance_profile_name
 
   tags = {
-    name    = "${var.project_name}-${each.key}"
+    Name    = "${var.project_name}-${each.key}"
     Project = var.project_name
     osType  = each.value.os_type
   }
