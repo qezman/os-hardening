@@ -1,0 +1,4 @@
+theme: jekyll-theme-minimal
+title: Automated OS Hardening & Security Audit
+description: Hardening of os (Ubuntu & Amazon Linux) using Terraform 
+markdown: kramdown
